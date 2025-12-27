@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from shared.database import get_db_pool, close_db_pool, check_db_health
 from shared.rabbitmq import check_rabbitmq_health, close_rabbitmq_connection
-from routers import csv_ingest
+from routers import csv_ingest, gdb_ingest
 from models.schemas import HealthResponse, ErrorResponse
 from config import Settings
 from exceptions import register_exception_handlers
@@ -153,8 +153,8 @@ register_exception_handlers(app)
 app.include_router(csv_ingest.router)
 logger.info("Registered router: CSV Ingestion")
 
-# TODO: Register GDB router when implemented
-# app.include_router(gdb_ingest.router)
+app.include_router(gdb_ingest.router)
+logger.info("Registered router: GDB Ingestion")
 
 # TODO: Register status router when implemented
 # app.include_router(status.router)
