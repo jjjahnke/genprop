@@ -36,6 +36,7 @@ help:
 	@echo "🚀 Development:"
 	@echo "  make dev              Start API in development mode (hot reload)"
 	@echo "  make run              Start API in production mode"
+	@echo "  make stop             Stop running API server"
 	@echo "  make lint             Check code with ruff"
 	@echo "  make format           Format code with ruff"
 	@echo "  make clean            Remove temporary files and caches"
@@ -150,11 +151,20 @@ dev:
 	@echo "🚀 Starting API in development mode..."
 	@echo "📍 API: http://localhost:8080"
 	@echo "📚 Docs: http://localhost:8080/docs"
+	@echo "💡 Press Ctrl+C to stop, or run 'make stop' from another terminal"
 	poetry run fastapi dev main.py --host 0.0.0.0 --port 8080
 
 run:
 	@echo "🚀 Starting API in production mode..."
 	poetry run uvicorn main:app --host 0.0.0.0 --port 8080
+
+stop:
+	@echo "🛑 Stopping API server..."
+	@pkill -f "fastapi dev main.py --host 0.0.0.0 --port 8080" || \
+	 pkill -f "uvicorn main:app --host 0.0.0.0 --port 8080" || \
+	 lsof -ti:8080 | xargs kill -9 2>/dev/null || \
+	 echo "No API process found on port 8080"
+	@echo "✅ API stopped"
 
 lint:
 	@echo "🔍 Checking code with ruff..."
