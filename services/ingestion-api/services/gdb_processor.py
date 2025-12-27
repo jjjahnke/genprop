@@ -25,8 +25,10 @@ from shapely.geometry import shape
 from shared.models import V11ParcelRecord
 from shared.rabbitmq import publish_message
 from .batch_tracker import update_batch_progress, complete_batch, fail_batch
+from .logging_utils import get_logger, set_batch_id
+from .background_utils import safe_background_task
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Target CRS for Wisconsin data
 WISCONSIN_CRS = "EPSG:3071"  # Wisconsin Transverse Mercator
@@ -197,6 +199,7 @@ def transform_to_wisconsin_crs(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf
 
 
+@safe_background_task
 async def process_gdb_async(
     gdb_path: Path,
     layer_name: str,
@@ -231,6 +234,9 @@ async def process_gdb_async(
         )
         ```
     """
+    # Set batch_id in logging context
+    set_batch_id(batch_id)
+
     logger.info(
         f"Starting GDB processing: {gdb_path}/{layer_name} "
         f"(batch: {batch_id}, source: {source_name})"
