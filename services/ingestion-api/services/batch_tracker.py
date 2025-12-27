@@ -6,7 +6,7 @@ Tracks upload progress, record counts, and batch status.
 """
 
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import logging
 
@@ -68,7 +68,7 @@ async def create_batch(
             file_size_bytes,
             total_records,
             'processing',
-            datetime.utcnow()
+            datetime.now(timezone.utc)
         )
 
     logger.info(f"Created batch {batch_id} for {source_name} ({source_type}/{file_format})")
@@ -145,7 +145,7 @@ async def complete_batch(batch_id: UUID, total_processed: int) -> None:
             WHERE batch_id = $1
         """,
             batch_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
             total_processed
         )
 
@@ -176,7 +176,7 @@ async def fail_batch(batch_id: UUID, error_message: str) -> None:
             WHERE batch_id = $1
         """,
             batch_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
             error_message
         )
 
