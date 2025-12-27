@@ -152,7 +152,7 @@ dev:
 	@echo "📍 API: http://localhost:8080"
 	@echo "📚 Docs: http://localhost:8080/docs"
 	@echo "💡 Press Ctrl+C to stop, or run 'make stop' from another terminal"
-	poetry run fastapi dev main.py --host 0.0.0.0 --port 8080
+	poetry run uvicorn main:app --reload --host 0.0.0.0 --port 8080
 
 run:
 	@echo "🚀 Starting API in production mode..."
@@ -160,7 +160,7 @@ run:
 
 stop:
 	@echo "🛑 Stopping API server..."
-	@pkill -f "fastapi dev main.py --host 0.0.0.0 --port 8080" || \
+	@pkill -f "uvicorn main:app --reload --host 0.0.0.0 --port 8080" || \
 	 pkill -f "uvicorn main:app --host 0.0.0.0 --port 8080" || \
 	 lsof -ti:8080 | xargs kill -9 2>/dev/null || \
 	 echo "No API process found on port 8080"

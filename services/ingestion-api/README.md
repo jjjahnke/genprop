@@ -147,11 +147,12 @@ make dev
 4. **Start the API**:
    ```bash
    # Development mode (hot reload)
-   poetry run fastapi dev main.py --host 0.0.0.0 --port 8080
+   poetry run uvicorn main:app --reload --host 0.0.0.0 --port 8080
    # or: make dev
 
    # Production mode
-   # make run
+   # poetry run uvicorn main:app --host 0.0.0.0 --port 8080
+   # or: make run
    ```
 
 5. **Access the API**:
