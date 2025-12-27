@@ -107,30 +107,51 @@ Response 200 OK:
 - Poetry
 - Docker Compose (for local dependencies)
 - GDAL installed locally (for development)
+- Make (optional, for convenient commands)
 
-### Installation
+### Quickstart with Make
+
+```bash
+cd services/ingestion-api
+
+# Start services, run migrations, install deps, and run tests
+make quickstart
+
+# Start API in development mode
+make dev
+```
+
+### Manual Installation
 
 1. **Install dependencies**:
    ```bash
    cd services/ingestion-api
    poetry install
+   # or: make install
    ```
 
 2. **Start local services**:
    ```bash
    # From project root
    docker-compose up -d
+   # or: make services-up
    ```
 
 3. **Run database migrations**:
    ```bash
    # From project root
    poetry run alembic upgrade head
+   # or: make migrate
    ```
 
 4. **Start the API**:
    ```bash
-   poetry run uvicorn main:app --reload --host 0.0.0.0 --port 8080
+   # Development mode (hot reload)
+   poetry run fastapi dev main.py --host 0.0.0.0 --port 8080
+   # or: make dev
+
+   # Production mode
+   # make run
    ```
 
 5. **Access the API**:
@@ -164,33 +185,95 @@ API_PORT=8080
 
 ## Development
 
+### Make Commands
+
+See all available commands:
+```bash
+make help
+```
+
+Common development commands:
+```bash
+# Testing
+make test              # Run all tests
+make test-unit         # Run unit tests only (fast, no Docker)
+make test-integration  # Run integration tests (requires Docker)
+make test-cov          # Run tests with coverage report
+
+# Services
+make services-up       # Start PostgreSQL, RabbitMQ, Redis
+make services-down     # Stop all services
+make db-console        # Open PostgreSQL console
+make rabbitmq-queues   # List RabbitMQ queues
+
+# Development
+make dev               # Start API with hot reload
+make lint              # Check code with ruff
+make format            # Format code
+make clean             # Remove temp files and caches
+```
+
 ### Running Tests
 
+**Unit Tests** (Fast, no Docker required):
 ```bash
-# All tests
-poetry run pytest
-
-# With coverage
-poetry run pytest --cov --cov-report=html
-
-# Specific test
-poetry run pytest tests/test_gdb_ingest.py -v
+make test-unit
+# or: poetry run pytest -m "not integration" -v
 ```
+
+**Integration Tests** (Requires Docker):
+```bash
+# Start services first
+make services-up
+make migrate
+
+# Run integration tests
+make test-integration
+# or: poetry run pytest -m integration -v
+```
+
+**All Tests with Coverage**:
+```bash
+make test-cov
+# or: poetry run pytest --cov=services --cov=routers --cov-report=html
+
+# View coverage report
+open htmlcov/index.html
+```
+
+**Specific Test File**:
+```bash
+poetry run pytest tests/test_gdb_processor.py -v
+```
+
+### Test Suite
+
+**Total**: 66 tests (60 unit + 6 integration)
+- **Unit Tests**: CSV processing (22), GDB ingestion (8), GDB processor (22), Status API (8)
+- **Integration Tests**: Full upload flows with real PostgreSQL and RabbitMQ
+- **Coverage**: 82% source code coverage
+
+See `tests/README.md` for complete testing documentation.
 
 ### Test Fixtures
 
 Located in `tests/fixtures/`:
-- `sample_retr.csv` - RETR test data (1000 rows)
-- `sample_parcels.gdb.zip` - Synthetic parcel GDB (100 features)
+- `sample_retr.csv` - Real RETR test data (1,000 rows, 513 KB)
+- `test_parcels.gdb.zip` - Synthetic Wisconsin parcels (75 features, 16 KB)
+  - Layer: `V11_Parcels`
+  - CRS: `EPSG:3071` (Wisconsin Transverse Mercator)
+- `create_test_gdb.py` - Script to regenerate test GDB
 
-### Linting
+### Linting & Formatting
 
 ```bash
 # Check code
-poetry run ruff check .
+make lint
+# or: poetry run ruff check .
 
-# Auto-fix
-poetry run ruff check . --fix
+# Auto-fix and format
+make format
+# or: poetry run ruff check . --fix && poetry run ruff format .
 ```
 
 ## Architecture
@@ -322,6 +405,37 @@ kubectl apply -f infrastructure/k8s/deployments/ingestion-api.yaml
 
 ## Troubleshooting
 
+### Common Issues
+
+**Services not running**:
+```bash
+make services-up
+docker-compose ps  # Verify services are up
+```
+
+**Database not migrated**:
+```bash
+make migrate
+# or reset: make db-reset
+```
+
+**RabbitMQ queues full**:
+```bash
+make rabbitmq-queues  # List queues
+make rabbitmq-purge   # Clear all queues
+```
+
+**Tests failing**:
+```bash
+# Unit tests should work without Docker
+make test-unit
+
+# Integration tests require services
+make services-up
+make migrate
+make test-integration
+```
+
 ### GDAL Issues
 
 If you get GDAL import errors:
@@ -347,8 +461,23 @@ For large GDB files, ensure sufficient memory:
 
 Check RabbitMQ is running:
 ```bash
+make services-up
+make rabbitmq-queues
+# or manually:
 docker-compose ps rabbitmq
 curl http://localhost:15672/api/overview
+```
+
+### Clean Restart
+
+If things are broken, try a clean restart:
+```bash
+make clean              # Remove temp files
+make services-down      # Stop services
+make services-clean     # Remove volumes
+make services-up        # Start fresh
+make migrate            # Run migrations
+make test-unit          # Verify tests pass
 ```
 
 ## Contributing
