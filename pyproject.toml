@@ -38,8 +38,32 @@ testpaths = ["tests", "services/*/tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "-v --cov --cov-report=term-missing --cov-report=html"
+addopts = "-v --cov=shared --cov=services --cov-report=term-missing --cov-report=html --cov-config=pyproject.toml"
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+    "*/.venv/*",
+    "*/venv/*",
+    "*/hash_utils.py",
+    "*/wisconsin_normalizer.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
 
 [tool.mypy]
 python_version = "3.12"
