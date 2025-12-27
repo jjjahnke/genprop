@@ -298,28 +298,65 @@ class TestProcessGDBAsync:
 
     async def test_processes_gdb_successfully(self, tmp_path):
         """Should process GDB layer and publish to RabbitMQ."""
-        # Create mock GeoDataFrame
-        gdf = gpd.GeoDataFrame(
+        # Create mock features (Fiona format)
+        mock_features = [
             {
-                "STATEID": ["WI001", "WI002", "WI003"],
-                "PARCELID": ["123", "124", "125"],
-                "ADDNUM": ["100", "200", "300"],
-                "STREETNAME": ["MAIN ST", "OAK AVE", "ELM RD"]
+                "properties": {
+                    "STATEID": "WI001",
+                    "PARCELID": "123",
+                    "ADDNUM": "100",
+                    "STREETNAME": "MAIN ST"
+                },
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[(500000, 200000), (500000, 200100), (500100, 200100), (500000, 200000)]]
+                }
             },
-            geometry=[
-                Polygon([(500000, 200000), (500000, 200100), (500100, 200100)]),
-                Polygon([(500200, 200000), (500200, 200100), (500300, 200100)]),
-                Polygon([(500400, 200000), (500400, 200100), (500500, 200100)])
-            ],
-            crs=WISCONSIN_CRS
-        )
+            {
+                "properties": {
+                    "STATEID": "WI002",
+                    "PARCELID": "124",
+                    "ADDNUM": "200",
+                    "STREETNAME": "OAK AVE"
+                },
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[(500200, 200000), (500200, 200100), (500300, 200100), (500200, 200000)]]
+                }
+            },
+            {
+                "properties": {
+                    "STATEID": "WI003",
+                    "PARCELID": "125",
+                    "ADDNUM": "300",
+                    "STREETNAME": "ELM RD"
+                },
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[(500400, 200000), (500400, 200100), (500500, 200100), (500400, 200000)]]
+                }
+            }
+        ]
+
+        # Mock CRS object
+        mock_crs = MagicMock()
+        mock_crs.to_epsg.return_value = 3071
+
+        # Mock fiona source
+        mock_src = MagicMock()
+        mock_src.__len__.return_value = 3
+        mock_src.__iter__.return_value = iter(mock_features)
+        mock_src.crs = mock_crs
 
         batch_id = uuid4()
 
-        with patch('services.gdb_processor.gpd.read_file', return_value=gdf), \
+        with patch('services.gdb_processor.fiona.open') as mock_fiona_open, \
+             patch('services.gdb_processor.CRS.from_user_input', return_value=mock_crs), \
              patch('services.gdb_processor.publish_message', return_value=True) as mock_publish, \
              patch('services.gdb_processor.update_batch_progress', new_callable=AsyncMock) as mock_update, \
              patch('services.gdb_processor.complete_batch', new_callable=AsyncMock) as mock_complete:
+
+            mock_fiona_open.return_value.__enter__.return_value = mock_src
 
             await process_gdb_async(
                 gdb_path=tmp_path / "test.gdb",
@@ -340,19 +377,43 @@ class TestProcessGDBAsync:
 
     async def test_handles_geometry_transformation(self, tmp_path):
         """Should transform geometry to Wisconsin CRS if needed."""
-        # Create GeoDataFrame in WGS84
-        gdf = gpd.GeoDataFrame(
-            {"STATEID": ["WI001"], "PARCELID": ["123"]},
-            geometry=[Polygon([(-89.4, 43.0), (-89.4, 43.1), (-89.3, 43.1)])],
-            crs="EPSG:4326"
-        )
+        # Create mock feature in WGS84
+        mock_feature = {
+            "properties": {"STATEID": "WI001", "PARCELID": "123"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[(-89.4, 43.0), (-89.4, 43.1), (-89.3, 43.1), (-89.4, 43.0)]]
+            }
+        }
+
+        # Mock CRS objects
+        mock_source_crs = MagicMock()
+        mock_source_crs.to_epsg.return_value = 4326  # WGS84
+
+        mock_target_crs = MagicMock()
+        mock_target_crs.to_epsg.return_value = 3071
+
+        # Mock transformer
+        mock_transformer = MagicMock()
+        mock_transformer.transform = lambda x, y: (x + 500000, y + 200000)  # Fake transformation
+
+        # Mock fiona source
+        mock_src = MagicMock()
+        mock_src.__len__.return_value = 1
+        mock_src.__iter__.return_value = iter([mock_feature])
+        mock_src.crs = mock_source_crs
 
         batch_id = uuid4()
 
-        with patch('services.gdb_processor.gpd.read_file', return_value=gdf), \
+        with patch('services.gdb_processor.fiona.open') as mock_fiona_open, \
+             patch('services.gdb_processor.CRS.from_user_input', return_value=mock_source_crs), \
+             patch('services.gdb_processor.CRS.from_epsg', return_value=mock_target_crs), \
+             patch('services.gdb_processor.Transformer.from_crs', return_value=mock_transformer), \
              patch('services.gdb_processor.publish_message', return_value=True) as mock_publish, \
              patch('services.gdb_processor.update_batch_progress', new_callable=AsyncMock), \
              patch('services.gdb_processor.complete_batch', new_callable=AsyncMock):
+
+            mock_fiona_open.return_value.__enter__.return_value = mock_src
 
             await process_gdb_async(
                 gdb_path=tmp_path / "test.gdb",
@@ -373,21 +434,40 @@ class TestProcessGDBAsync:
 
     async def test_handles_empty_geometry(self, tmp_path):
         """Should skip features with empty geometry."""
-        gdf = gpd.GeoDataFrame(
-            {"STATEID": ["WI001", "WI002"], "PARCELID": ["123", "124"]},
-            geometry=[
-                Polygon([(500000, 200000), (500000, 200100), (500100, 200100)]),
-                None  # Empty geometry
-            ],
-            crs=WISCONSIN_CRS
-        )
+        # Create mock features - one valid, one with null geometry
+        mock_features = [
+            {
+                "properties": {"STATEID": "WI001", "PARCELID": "123"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[(500000, 200000), (500000, 200100), (500100, 200100), (500000, 200000)]]
+                }
+            },
+            {
+                "properties": {"STATEID": "WI002", "PARCELID": "124"},
+                "geometry": None  # Empty geometry
+            }
+        ]
+
+        # Mock CRS object
+        mock_crs = MagicMock()
+        mock_crs.to_epsg.return_value = 3071
+
+        # Mock fiona source
+        mock_src = MagicMock()
+        mock_src.__len__.return_value = 2
+        mock_src.__iter__.return_value = iter(mock_features)
+        mock_src.crs = mock_crs
 
         batch_id = uuid4()
 
-        with patch('services.gdb_processor.gpd.read_file', return_value=gdf), \
+        with patch('services.gdb_processor.fiona.open') as mock_fiona_open, \
+             patch('services.gdb_processor.CRS.from_user_input', return_value=mock_crs), \
              patch('services.gdb_processor.publish_message', return_value=True) as mock_publish, \
              patch('services.gdb_processor.update_batch_progress', new_callable=AsyncMock), \
              patch('services.gdb_processor.complete_batch', new_callable=AsyncMock):
+
+            mock_fiona_open.return_value.__enter__.return_value = mock_src
 
             await process_gdb_async(
                 gdb_path=tmp_path / "test.gdb",
@@ -404,7 +484,7 @@ class TestProcessGDBAsync:
         """Should fail batch if processing encounters errors."""
         batch_id = uuid4()
 
-        with patch('services.gdb_processor.gpd.read_file', side_effect=Exception("Read error")), \
+        with patch('services.gdb_processor.fiona.open', side_effect=Exception("Read error")), \
              patch('services.gdb_processor.fail_batch', new_callable=AsyncMock) as mock_fail:
 
             # Background task wrapper suppresses exceptions to prevent service crash
@@ -424,19 +504,37 @@ class TestProcessGDBAsync:
 
     async def test_processes_in_chunks(self, tmp_path):
         """Should process features in chunks for memory efficiency."""
-        # Create GeoDataFrame with 5 features
-        gdf = gpd.GeoDataFrame(
-            {"STATEID": [f"WI{i:03d}" for i in range(5)], "PARCELID": [f"{i}" for i in range(5)]},
-            geometry=[Polygon([(500000 + i * 100, 200000), (500000 + i * 100, 200100), (500100 + i * 100, 200100)]) for i in range(5)],
-            crs=WISCONSIN_CRS
-        )
+        # Create mock features (5 features)
+        mock_features = [
+            {
+                "properties": {"STATEID": f"WI{i:03d}", "PARCELID": f"{i}"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[(500000 + i * 100, 200000), (500000 + i * 100, 200100), (500100 + i * 100, 200100), (500000 + i * 100, 200000)]]
+                }
+            }
+            for i in range(5)
+        ]
+
+        # Mock CRS object
+        mock_crs = MagicMock()
+        mock_crs.to_epsg.return_value = 3071
+
+        # Mock fiona source
+        mock_src = MagicMock()
+        mock_src.__len__.return_value = 5
+        mock_src.__iter__.return_value = iter(mock_features)
+        mock_src.crs = mock_crs
 
         batch_id = uuid4()
 
-        with patch('services.gdb_processor.gpd.read_file', return_value=gdf), \
+        with patch('services.gdb_processor.fiona.open') as mock_fiona_open, \
+             patch('services.gdb_processor.CRS.from_user_input', return_value=mock_crs), \
              patch('services.gdb_processor.publish_message', return_value=True), \
              patch('services.gdb_processor.update_batch_progress', new_callable=AsyncMock) as mock_update, \
              patch('services.gdb_processor.complete_batch', new_callable=AsyncMock):
+
+            mock_fiona_open.return_value.__enter__.return_value = mock_src
 
             await process_gdb_async(
                 gdb_path=tmp_path / "test.gdb",

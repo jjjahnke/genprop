@@ -40,6 +40,9 @@ python_classes = "Test*"
 python_functions = "test_*"
 addopts = "-v --cov=shared --cov=services --cov-report=term-missing --cov-report=html --cov-config=pyproject.toml"
 asyncio_mode = "auto"
+markers = [
+    "integration: Integration tests requiring docker-compose services (deselect with '-m \"not integration\"')",
+]
 
 [tool.coverage.run]
 source = ["."]
