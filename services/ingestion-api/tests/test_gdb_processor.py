@@ -407,14 +407,14 @@ class TestProcessGDBAsync:
         with patch('services.gdb_processor.gpd.read_file', side_effect=Exception("Read error")), \
              patch('services.gdb_processor.fail_batch', new_callable=AsyncMock) as mock_fail:
 
-            with pytest.raises(Exception, match="Read error"):
-                await process_gdb_async(
-                    gdb_path=tmp_path / "test.gdb",
-                    layer_name="V11_Parcels",
-                    batch_id=batch_id,
-                    source_name="Test",
-                    chunk_size=100
-                )
+            # Background task wrapper suppresses exceptions to prevent service crash
+            await process_gdb_async(
+                gdb_path=tmp_path / "test.gdb",
+                layer_name="V11_Parcels",
+                batch_id=batch_id,
+                source_name="Test",
+                chunk_size=100
+            )
 
             # Verify batch was marked as failed
             mock_fail.assert_called_once()

@@ -282,11 +282,30 @@ async def upload_parcel_gdb(
 
         # Get feature count for the layer
         layer_info = gdb_info["layer_info"].get(validated_layer_name, {})
+
+        # Check if layer inspection failed
+        if "error" in layer_info:
+            gdb_path.parent.rmdir() if gdb_path.parent.exists() else None
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "LayerInspectionError",
+                    "message": f"Failed to inspect layer '{validated_layer_name}': {layer_info['error']}",
+                    "detail": {
+                        "layer_name": validated_layer_name,
+                        "error": layer_info['error']
+                    }
+                }
+            )
+
         total_features = layer_info.get("feature_count")
+
+        # Format feature count for logging
+        features_str = f"{total_features:,}" if total_features is not None else "unknown"
 
         logger.info(
             f"GDB inspection complete: {len(gdb_info['layers'])} layer(s), "
-            f"processing '{validated_layer_name}' with {total_features:,} features"
+            f"processing '{validated_layer_name}' with {features_str} features"
         )
 
         # Create batch record

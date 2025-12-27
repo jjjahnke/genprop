@@ -329,19 +329,24 @@ class TestValidateCSVFormat:
 
     def test_validates_correct_csv(self, sample_parcel_csv):
         """Test validation of correct CSV."""
-        assert validate_csv_format(sample_parcel_csv) is True
+        is_valid, error_msg = validate_csv_format(sample_parcel_csv)
+        assert is_valid is True
+        assert error_msg is None
 
     def test_rejects_invalid_csv(self, malformed_csv):
         """Test rejection of invalid CSV."""
         # Might still parse, but should handle gracefully
-        result = validate_csv_format(malformed_csv)
-        # Just check it doesn't crash
-        assert isinstance(result, bool)
+        is_valid, error_msg = validate_csv_format(malformed_csv)
+        # Just check it returns a tuple
+        assert isinstance(is_valid, bool)
+        assert error_msg is None or isinstance(error_msg, str)
 
     def test_rejects_non_existent_file(self, tmp_path):
         """Test handling of non-existent file."""
         fake_file = tmp_path / "nonexistent.csv"
-        assert validate_csv_format(fake_file) is False
+        is_valid, error_msg = validate_csv_format(fake_file)
+        assert is_valid is False
+        assert error_msg is not None
 
 
 class TestCSVUploadEndpoints:
@@ -349,7 +354,7 @@ class TestCSVUploadEndpoints:
 
     @patch('routers.csv_ingest.create_batch', new_callable=AsyncMock)
     @patch('routers.csv_ingest.count_csv_rows', new_callable=AsyncMock)
-    @patch('routers.csv_ingest.validate_csv_format', return_value=True)
+    @patch('routers.csv_ingest.validate_csv_format', return_value=(True, None))
     @patch('routers.csv_ingest.settings')
     def test_parcel_csv_upload_success(self, mock_settings, mock_validate, mock_count, mock_create_batch, client, sample_parcel_csv):
         """Test successful parcel CSV upload."""
@@ -393,7 +398,7 @@ class TestCSVUploadEndpoints:
         assert response.status_code == 400
         assert "Invalid file extension" in response.json()["message"]
 
-    @patch('routers.csv_ingest.validate_csv_format', return_value=False)
+    @patch('routers.csv_ingest.validate_csv_format', return_value=(False, "Invalid CSV format: parsing error"))
     @patch('routers.csv_ingest.settings')
     def test_rejects_invalid_csv_format(self, mock_settings, mock_validate, client, malformed_csv):
         """Test rejection of invalid CSV format."""
@@ -409,7 +414,7 @@ class TestCSVUploadEndpoints:
             )
 
         assert response.status_code == 400
-        assert "not a valid CSV" in response.json()["message"]
+        assert "Invalid CSV format" in response.json()["message"]
 
     @patch('routers.csv_ingest.settings')
     def test_validates_source_name_format(self, mock_settings, client, sample_parcel_csv):

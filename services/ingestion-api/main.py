@@ -23,12 +23,25 @@ from routers import csv_ingest, gdb_ingest, status
 from models.schemas import HealthResponse, ErrorResponse
 from config import Settings
 from exceptions import register_exception_handlers
+from middleware import RequestIDMiddleware
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# Configure structured logging
+from services.logging_utils import StructuredFormatter
+
+# Create console handler with structured formatter
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(
+    StructuredFormatter(
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
 )
+
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(console_handler)
+
 logger = logging.getLogger(__name__)
 
 # Load settings
@@ -120,6 +133,10 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json"
 )
+
+# Add Request ID middleware (first, so it wraps everything)
+app.add_middleware(RequestIDMiddleware)
+logger.info("Registered middleware: Request ID tracking")
 
 # Add CORS middleware (configure allowed origins based on environment)
 if settings.DEBUG or settings.ENVIRONMENT == "development":

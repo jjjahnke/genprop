@@ -186,13 +186,14 @@ async def upload_parcel_csv(
         validate_file_size(file_size_bytes, settings.max_upload_size_bytes)
 
         # Validate it's actually a CSV
-        if not validate_csv_format(temp_file):
+        is_valid, validation_error = validate_csv_format(temp_file)
+        if not is_valid:
             temp_file.unlink()  # Delete invalid file
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": "InvalidCSVFormat",
-                    "message": "File is not a valid CSV or cannot be parsed",
+                    "message": validation_error or "File is not a valid CSV or cannot be parsed",
                     "detail": {"filename": file.filename}
                 }
             )
@@ -318,13 +319,14 @@ async def upload_retr_csv(
         validate_file_size(file_size_bytes, settings.max_upload_size_bytes)
 
         # Validate it's actually a CSV
-        if not validate_csv_format(temp_file):
+        is_valid, validation_error = validate_csv_format(temp_file)
+        if not is_valid:
             temp_file.unlink()  # Delete invalid file
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": "InvalidCSVFormat",
-                    "message": "File is not a valid CSV or cannot be parsed",
+                    "message": validation_error or "File is not a valid CSV or cannot be parsed",
                     "detail": {"filename": file.filename}
                 }
             )

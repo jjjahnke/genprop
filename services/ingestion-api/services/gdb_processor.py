@@ -12,6 +12,7 @@ Handles GDB file uploads for Wisconsin V11 Parcel data:
 
 import logging
 import zipfile
+import asyncio
 from pathlib import Path
 from typing import Literal, Optional, Dict, Any, List
 from uuid import UUID
@@ -21,12 +22,16 @@ import fiona
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import shape
+from shapely.ops import transform as shapely_transform
+from pyproj import CRS, Transformer
 
 from shared.models import V11ParcelRecord
 from shared.rabbitmq import publish_message
 from .batch_tracker import update_batch_progress, complete_batch, fail_batch
+from .logging_utils import get_logger, set_batch_id
+from .background_utils import safe_background_task
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Target CRS for Wisconsin data
 WISCONSIN_CRS = "EPSG:3071"  # Wisconsin Transverse Mercator
@@ -113,7 +118,19 @@ def inspect_gdb(gdb_path: Path) -> Dict[str, Any]:
             with fiona.open(str(gdb_path), layer=layer_name) as src:
                 # Get CRS
                 crs = src.crs_wkt if src.crs else "Unknown"
-                crs_epsg = src.crs.get('init', 'Unknown') if src.crs else 'Unknown'
+
+                # Extract EPSG code from CRS
+                crs_epsg = 'Unknown'
+                if src.crs:
+                    # Try to get EPSG code from CRS object
+                    try:
+                        if hasattr(src.crs, 'to_epsg'):
+                            epsg_code = src.crs.to_epsg()
+                            crs_epsg = f"EPSG:{epsg_code}" if epsg_code else 'Unknown'
+                        elif isinstance(src.crs, dict) and 'init' in src.crs:
+                            crs_epsg = src.crs['init']
+                    except Exception:
+                        crs_epsg = 'Unknown'
 
                 # Get bounds
                 bounds = src.bounds if hasattr(src, 'bounds') else None
@@ -197,6 +214,7 @@ def transform_to_wisconsin_crs(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf
 
 
+@safe_background_task
 async def process_gdb_async(
     gdb_path: Path,
     layer_name: str,
@@ -231,58 +249,85 @@ async def process_gdb_async(
         )
         ```
     """
+    # Set batch_id in logging context
+    set_batch_id(batch_id)
+
     logger.info(
         f"Starting GDB processing: {gdb_path}/{layer_name} "
         f"(batch: {batch_id}, source: {source_name})"
     )
 
     try:
-        # Read the entire layer (we'll process in chunks)
-        logger.info(f"Reading layer '{layer_name}' from {gdb_path}")
-        gdf = gpd.read_file(str(gdb_path), layer=layer_name)
+        # Open layer with Fiona for streaming (doesn't load everything into memory)
+        logger.info(f"Opening layer '{layer_name}' from {gdb_path} for streaming")
 
-        total_features = len(gdf)
-        logger.info(f"Loaded {total_features:,} features from layer '{layer_name}'")
+        with fiona.open(str(gdb_path), layer=layer_name) as src:
+            total_features = len(src)
+            logger.info(f"Layer contains {total_features:,} features (streaming mode)")
 
-        # Transform to Wisconsin CRS if needed
-        gdf = transform_to_wisconsin_crs(gdf)
+            # Get source CRS
+            source_crs = src.crs
+            needs_transform = False
+            transformer = None
 
-        # Process in chunks for memory efficiency
-        total_processed = 0
-        total_failed = 0
-        chunk_num = 0
+            # Check if we need CRS transformation
+            if source_crs:
+                try:
+                    source_crs_obj = CRS.from_user_input(source_crs)
+                    target_crs_obj = CRS.from_epsg(3071)  # Wisconsin CRS
 
-        for start_idx in range(0, total_features, chunk_size):
-            end_idx = min(start_idx + chunk_size, total_features)
-            chunk = gdf.iloc[start_idx:end_idx]
-            chunk_num += 1
+                    if source_crs_obj.to_epsg() != 3071:
+                        needs_transform = True
+                        transformer = Transformer.from_crs(
+                            source_crs_obj,
+                            target_crs_obj,
+                            always_xy=True
+                        )
+                        logger.info(
+                            f"CRS transformation enabled: {source_crs_obj.to_epsg()} → EPSG:3071"
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not determine CRS transformation: {e}")
 
-            logger.debug(
-                f"Processing chunk {chunk_num}: rows {start_idx}-{end_idx} "
-                f"({len(chunk)} features)"
-            )
-
+            # Process features in chunks using streaming
+            total_processed = 0
+            total_failed = 0
+            chunk_num = 0
+            chunk_features = []
             chunk_failed = 0
 
-            for idx, row in chunk.iterrows():
+            for feature_idx, feature in enumerate(src, start=1):
                 try:
-                    # Extract geometry
-                    geometry = row.geometry
-                    if geometry is None or geometry.is_empty:
-                        logger.warning(f"Row {idx}: Empty or null geometry, skipping")
+                    # Extract properties (attributes)
+                    properties = feature.get('properties', {})
+
+                    # Extract and transform geometry
+                    geometry_dict = feature.get('geometry')
+                    if not geometry_dict:
+                        logger.warning(f"Feature {feature_idx}: No geometry, skipping")
                         chunk_failed += 1
                         continue
+
+                    # Convert to Shapely geometry
+                    geometry = shape(geometry_dict)
+
+                    if geometry is None or geometry.is_empty:
+                        logger.warning(f"Feature {feature_idx}: Empty geometry, skipping")
+                        chunk_failed += 1
+                        continue
+
+                    # Transform CRS if needed
+                    if needs_transform and transformer:
+                        geometry = shapely_transform(transformer.transform, geometry)
 
                     # Convert geometry to WKT
                     geometry_wkt = geometry.wkt
                     geometry_type = geometry.geom_type
 
-                    # Build V11ParcelRecord from row data
-                    # Map GDB field names to V11 schema (case-insensitive)
+                    # Build V11ParcelRecord from properties
                     row_dict = {
-                        k: (v if not (isinstance(v, float) and pd.isna(v)) else None)
-                        for k, v in row.to_dict().items()
-                        if k != 'geometry'  # Exclude geometry column
+                        k: (v if v is not None and v != '' else None)
+                        for k, v in properties.items()
                     }
 
                     # Add geometry fields
@@ -297,42 +342,72 @@ async def process_gdb_async(
                         "batch_id": str(batch_id),
                         "source_type": "PARCEL",
                         "source_file": f"{source_name}/{layer_name}",
-                        "source_row_number": int(idx) + 1,
+                        "source_row_number": feature_idx,
                         "raw_data": record.model_dump(exclude_none=True)
                     }
 
                     success = publish_message('deduplication', message)
 
                     if not success:
-                        logger.error(
-                            f"Failed to publish message for feature {idx + 1}"
-                        )
+                        logger.error(f"Failed to publish message for feature {feature_idx}")
                         chunk_failed += 1
 
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to process feature {idx + 1}: {e}"
-                    )
+                    logger.warning(f"Failed to process feature {feature_idx}: {e}")
                     chunk_failed += 1
 
-            # Update batch progress after each chunk
-            chunk_processed = len(chunk)
-            chunk_successful = chunk_processed - chunk_failed
+                # Check if we've completed a chunk
+                chunk_features.append(feature_idx)
 
-            await update_batch_progress(
-                batch_id=batch_id,
-                processed_count=chunk_processed,
-                new_count=chunk_successful,  # Will be updated by deduplication service
-                failed_count=chunk_failed
-            )
+                if len(chunk_features) >= chunk_size:
+                    chunk_num += 1
+                    chunk_processed = len(chunk_features)
+                    chunk_successful = chunk_processed - chunk_failed
 
-            total_processed += chunk_processed
-            total_failed += chunk_failed
+                    # Update batch progress
+                    await update_batch_progress(
+                        batch_id=batch_id,
+                        processed_count=chunk_processed,
+                        new_count=chunk_successful,
+                        failed_count=chunk_failed
+                    )
 
-            logger.info(
-                f"Chunk {chunk_num} complete: {chunk_successful}/{chunk_processed} succeeded "
-                f"(total: {total_processed}/{total_features})"
-            )
+                    total_processed += chunk_processed
+                    total_failed += chunk_failed
+
+                    logger.info(
+                        f"Chunk {chunk_num} complete: {chunk_successful}/{chunk_processed} succeeded "
+                        f"(total: {total_processed:,}/{total_features:,}, "
+                        f"{(total_processed/total_features*100):.1f}%)"
+                    )
+
+                    # Reset chunk tracking
+                    chunk_features = []
+                    chunk_failed = 0
+
+                    # Yield to event loop every chunk to keep API responsive
+                    await asyncio.sleep(0)
+
+            # Process remaining features in final partial chunk
+            if chunk_features:
+                chunk_num += 1
+                chunk_processed = len(chunk_features)
+                chunk_successful = chunk_processed - chunk_failed
+
+                await update_batch_progress(
+                    batch_id=batch_id,
+                    processed_count=chunk_processed,
+                    new_count=chunk_successful,
+                    failed_count=chunk_failed
+                )
+
+                total_processed += chunk_processed
+                total_failed += chunk_failed
+
+                logger.info(
+                    f"Final chunk {chunk_num} complete: {chunk_successful}/{chunk_processed} succeeded "
+                    f"(total: {total_processed:,}/{total_features:,})"
+                )
 
         # Mark batch as completed
         await complete_batch(batch_id, total_processed)
